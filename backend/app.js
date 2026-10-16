@@ -7,7 +7,7 @@ const { errorHandler } = require('./middleware/errorHandler');
 
 // Local dev addresses are always allowed; hosted frontends come from FRONTEND_URL (comma-separated)
 const allowedOrigins = () => [
-  'http://localhost:5173', 'http://127.0.0.1:5173',
+  'http://localhost:5180', 'http://127.0.0.1:5180',
   ...String(process.env.FRONTEND_URL || '').split(',').map((u) => u.trim().replace(/\/+$/, '')).filter(Boolean),
 ];
 

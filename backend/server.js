@@ -13,7 +13,7 @@ const app = createApp();
 const server = http.createServer(app);
 initSocket(server, allowedOrigins());
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5050;
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('✅ MongoDB connected');

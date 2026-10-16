@@ -41,23 +41,32 @@ cd backend
 npm install
 cp .env.example .env          # then fill in MONGODB_URI and JWT_SECRET
 npm run seed -- --patients    # demo services, staff and today's patients
-npm run dev                   # http://localhost:5000/api/health
+npm run dev                   # http://localhost:5050/api/health
 
 # 2. Frontend (second terminal)
 cd frontend
 npm install
-npm run dev                   # http://localhost:5173
+npm run dev                   # http://localhost:5180
 ```
 
 Open three windows to see it working together:
 
 | Page | Address | Log in |
 |---|---|---|
-| Patient | http://localhost:5173/ | none |
-| Staff | http://localhost:5173/staff | reception `0970000002`, clinician `0970000003`, admin `0970000001`; password `clinic123` |
-| Waiting-room screen | http://localhost:5173/display | none: tap once to turn on sound |
+| Patient | http://localhost:5180/ | none |
+| Staff | http://localhost:5180/staff | reception `0970000002`, clinician `0970000003`, admin `0970000001`; password `clinic123` |
+| Waiting-room screen | http://localhost:5180/display | none: tap once to turn on sound |
 
 Press **Done · Next patient** on the staff page and watch the display and the patient's ticket change instantly.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Blank page; console says *"Invalid hook call"* or mentions a `<Provider>` | Another project's service worker is serving its cached files at this address. DevTools → Application → Service workers → **Unregister**, then Storage → **Clear site data**, then reload with Ctrl+Shift+R. This project uses port 5180 to avoid it. |
+| `Port 5180 is already in use` | Another Vite server is running. Stop it, or change `server.port` in `frontend/vite.config.js` (and the allowed address in `backend/app.js`). |
+| Pages load but say *"No connection to the server"* | The backend is not running on port 5050. Check `PORT=5050` in `backend/.env` and that `npm run dev` in `backend/` says *MongoDB connected*. |
+| Backend says *MongoDB connection failed* | In Atlas → Network Access, allow your IP (or 0.0.0.0/0), and check the password in `MONGODB_URI`. |
 
 ## Tests
 
