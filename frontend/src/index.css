@@ -45,6 +45,7 @@ a { color: var(--teal); }
 .alert { padding: 10px 12px; border-radius: 10px; margin: 10px 0; font-size: 14px; }
 .alert--error { background: var(--red-light); color: var(--red); }
 .alert--ok { background: var(--green-light); color: var(--green); }
+.alert--info { background: var(--teal-light); color: var(--teal-dark); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;

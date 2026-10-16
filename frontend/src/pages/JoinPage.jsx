@@ -56,6 +56,11 @@ export default function JoinPage() {
       <p className="muted">Take a number from your phone. You can wait outside and watch your place in the line.</p>
       {error && <p className="alert alert--error">{error}</p>}
       {!services && !error && <p className="muted">Loading…</p>}
+      {services?.length === 0 && (
+        <p className="alert alert--info">
+          No queues are set up yet. Staff: load the clinic's services with <code>npm run seed</code> in <code>backend/</code>.
+        </p>
+      )}
 
       <div className="service-list">
         {services?.map((q) => (
