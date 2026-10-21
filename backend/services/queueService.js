@@ -116,12 +116,8 @@ const notifyNearlyUp = async (serviceId) => {
       console.log(`Notified ticket ${ticket.code} at ${ticket.phone}`);
     }
 
-    const res = await Ticket.updateOne({ _id: ticket._id }, { $set: { notifiedAt: new Date() } });
-    if (res.modifiedCount > 0) {
-      console.log(`Notified ticket ${ticket.code} at ${ticket.phone}`);
-      results.push({ ticketId: ticket._id, code: ticket.code, phone: ticket.phone });
-    } else {
-      console.log(`Ticket ${ticket.code} at ${ticket.phone} was already notified.`);
+    catch (error) {
+      console.error(`Failed to notify ticket ${ticket.code} at ${ticket.phone}:`, error.message);
     }
   }
 
