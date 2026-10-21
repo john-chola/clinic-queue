@@ -75,6 +75,7 @@ test('rooms are listed busiest first', () => {
 test('dates must be real YYYY-MM-DD days', () => {
   expect(isValidDateKey('2026-10-21')).toBe(true);
   expect(isValidDateKey('2026-02-30')).toBe(false);
+  expect(isValidDateKey('2026-13-01')).toBe(false);
   expect(isValidDateKey('21/10/2026')).toBe(false);
 });
 
