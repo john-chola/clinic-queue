@@ -1,10 +1,13 @@
 // Queue rules, with the database replaced by small in-memory fakes.
+jest.mock('../utils/sms', () => ({ sendSms: jest.fn() }));
+
 const Ticket = require('../models/Ticket');
 const Counter = require('../models/Counter');
 const Service = require('../models/Service');
 const QueueEvent = require('../models/QueueEvent');
 const queue = require('../services/queueService');
 const { compareQueueOrder, dateKey } = require('../utils/queue');
+const sms = require('../utils/sms');
 
 const SERVICE = { _id: 'svc1', name: 'OPD', prefix: 'A', rooms: ['Room 1', 'Room 2'], isOpen: true, defaultMinutes: 6 };
 
@@ -29,6 +32,33 @@ beforeEach(() => {
     next.calls += u.$inc.calls;
     return next;
   });
+
+  // notifyNearlyUp reads with .find().sort().limit() — return a chained stub.
+  jest.spyOn(Ticket, 'find').mockImplementation((q) => {
+    const matched = tickets.filter((t) => {
+      if (q.service !== undefined && String(t.service) !== String(q.service)) return false;
+      if (q.dateKey !== undefined && t.dateKey !== q.dateKey) return false;
+      if (q.status !== undefined && t.status !== q.status) return false;
+      return true;
+    });
+    return {
+      sort: () => ({
+        limit: (n) => [...matched].sort(compareQueueOrder).slice(0, n),
+      }),
+    };
+  });
+  // { notifiedAt: null } in Mongo matches both null and missing fields.
+  jest.spyOn(Ticket, 'updateOne').mockImplementation(async (q, u) => {
+    const t = tickets.find((tk) => String(tk._id) === String(q._id));
+    if (!t) return { modifiedCount: 0 };
+    if (q.notifiedAt === null && t.notifiedAt != null) return { modifiedCount: 0 };
+    Object.assign(t, u.$set);
+    return { modifiedCount: 1 };
+  });
+
+  // sendSms is a jest.fn() from the module factory — restoreAllMocks won't reset it.
+  sms.sendSms.mockClear();
+  sms.sendSms.mockResolvedValue(undefined);
 });
 afterEach(() => jest.restoreAllMocks());
 
@@ -115,5 +145,46 @@ describe('ticket actions', () => {
     stored({ status: 'waiting' });
     await expect(queue.applyAction('x', 'done')).rejects.toMatchObject({ statusCode: 409 });
     await expect(queue.applyAction('x', 'dance')).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('notifyNearlyUp', () => {
+  test('texts the first 3 patients in line who have phones, and marks them notified', async () => {
+    await join({ phone: '0971111111' });   // 1st — phone
+    await join({ phone: '0972222222' });   // 2nd — phone
+    await join({ phone: '0973333333' });   // 3rd — phone
+    await join();                          // 4th — no phone, and not in the first 3 anyway
+
+    await queue.notifyNearlyUp('svc1');
+
+    expect(sms.sendSms).toHaveBeenCalledTimes(3);
+    const messages = sms.sendSms.mock.calls.map((c) => c[1]);
+    expect(messages[0]).toContain('1st in line');
+    expect(messages[1]).toContain('2nd in line');
+    expect(messages[2]).toContain('3rd in line');
+    // The guarded update actually landed on each ticket
+    expect(tickets.filter((t) => t.notifiedAt instanceof Date)).toHaveLength(3);
+  });
+
+  test('a second call sends nothing: everyone near the front is already notified', async () => {
+    await join({ phone: '0971111111' });
+    await join({ phone: '0972222222' });
+    await join({ phone: '0973333333' });
+
+    await queue.notifyNearlyUp('svc1');
+    await queue.notifyNearlyUp('svc1');
+
+    expect(sms.sendSms).toHaveBeenCalledTimes(3); // not 6
+  });
+
+  test('a patient without a phone is skipped, not texted as "undefined"', async () => {
+    await join();                          // 1st — no phone
+    await join({ phone: '0972222222' });   // 2nd — phone
+
+    await queue.notifyNearlyUp('svc1');
+
+    expect(sms.sendSms).toHaveBeenCalledTimes(1);
+    expect(sms.sendSms.mock.calls[0][0]).toBeTruthy();
+    expect(sms.sendSms.mock.calls[0][1]).toContain('2nd in line');
   });
 });

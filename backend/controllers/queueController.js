@@ -2,6 +2,12 @@ const Service = require('../models/Service');
 const queue = require('../services/queueService');
 const { emitQueueChanged } = require('../utils/socket');
 
+// Fire-and-forget: a staff action should never wait on (or fail because of) an SMS.
+const notifyNearlyUp = (serviceId) =>
+  queue.notifyNearlyUp(serviceId).catch((err) =>
+    console.error('notifyNearlyUp failed:', err)
+  );
+
 // ── Public ──────────────────────────────────────────────────
 
 // GET /api/services: every service with its current queue length and wait
@@ -42,6 +48,7 @@ exports.cancelOwnTicket = async (req, res, next) => {
   try {
     const ticket = await queue.cancelByPatient(req.params.publicId);
     emitQueueChanged(ticket.service);
+    notifyNearlyUp(ticket.service);
     res.json({ status: 'success', message: `Ticket ${ticket.code} cancelled` });
   } catch (err) { next(err); }
 };
@@ -62,6 +69,7 @@ exports.callNext = async (req, res, next) => {
   try {
     const ticket = await queue.callNext(req.params.id, req.body?.room, req.staff);
     emitQueueChanged(req.params.id, ticket ? { called: { code: ticket.code, room: ticket.room } } : {});
+    notifyNearlyUp(req.params.id);
     res.json({
       status: 'success',
       ticket: ticket ? { _id: ticket._id, code: ticket.code, room: ticket.room, name: ticket.name } : null,
@@ -76,6 +84,10 @@ exports.ticketAction = async (req, res, next) => {
     const ticket = await queue.applyAction(req.params.id, req.params.action, req.staff);
     const extra = req.params.action === 'recall' ? { called: { code: ticket.code, room: ticket.room } } : {};
     emitQueueChanged(ticket.service, extra);
+    // Only these two actions remove someone from the queue and shift positions.
+    if (req.params.action === 'cancel' || req.params.action === 'no_show') {
+      notifyNearlyUp(ticket.service);
+    }
     res.json({ status: 'success', ticket: { _id: ticket._id, code: ticket.code, status: ticket.status } });
   } catch (err) { next(err); }
 };
