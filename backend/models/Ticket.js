@@ -22,7 +22,8 @@ const ticketSchema = new mongoose.Schema(
     status: { type: String, enum: STATUSES, default: 'waiting' },
     room:   { type: String, default: '' },
     calls:  { type: Number, default: 0 },                // how many times it has been announced
-
+     
+    notifiedAt: Date,  // when the "you're nearly up" SMS was sent
     calledAt: Date,
     doneAt:   Date,
   },

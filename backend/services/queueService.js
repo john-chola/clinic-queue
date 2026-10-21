@@ -9,6 +9,7 @@ const { normalizePhone, isValidPhone } = require('../utils/phone');
 const {
   dateKey, formatCode, averageServiceMinutes, estimateWaitMinutes, describeWait,
 } = require('../utils/queue');
+const {sendSms} = require('../utils/sms');
 
 const ACTIVE_ROOM_WINDOW_MS = 30 * 60 * 1000;   // a room that called someone in the last 30 min is "working"
 const QUEUE_ORDER = { priority: -1, createdAt: 1 };
@@ -86,6 +87,45 @@ const callNext = async (serviceId, room, staff) => {
   );
   if (next) log(next, 'called', staff, room);
   return next;   // null when nobody is waiting
+};
+
+const notifyNearlyUp = async (serviceId) => {
+  // "Today" window - local midnight to next midnight
+  const  startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new  Date(startOfDay);
+  endOfDay.setDate(endOfDay.getDate() + 1);
+
+  const firstThree = await Ticket.find({
+    service: serviceId,
+    status: 'waiting',
+    notifiedAt: { $exists: false },
+    createdAt: { $gte: startOfDay, $lt: endOfDay },
+  }).sort(QUEUE_ORDER)
+  .limit(3)
+  .lean();
+
+  const results = [];
+
+  for (const ticket of firstThree) {
+    if (ticket.phone || ticket.notifiedAt) continue; // Skip if no phone or already notified{
+      
+    try {
+      await sendSms(ticket.phone, `Your ticket ${ticket.code} is nearly up. Please be ready to go to the room when called.`);
+      await Ticket.updateOne({ _id: ticket._id }, { $set: { notifiedAt: new Date() } });
+      console.log(`Notified ticket ${ticket.code} at ${ticket.phone}`);
+    }
+
+    const res = await Ticket.updateOne({ _id: ticket._id }, { $set: { notifiedAt: new Date() } });
+    if (res.modifiedCount > 0) {
+      console.log(`Notified ticket ${ticket.code} at ${ticket.phone}`);
+      results.push({ ticketId: ticket._id, code: ticket.code, phone: ticket.phone });
+    } else {
+      console.log(`Ticket ${ticket.code} at ${ticket.phone} was already notified.`);
+    }
+  }
+
+  return results;
 };
 
 // ── Actions on one ticket ───────────────────────────────────
