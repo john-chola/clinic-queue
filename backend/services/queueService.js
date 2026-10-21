@@ -76,10 +76,10 @@ const callNext = async (serviceId, room, staff) => {
   const today = dateKey();
   const now = new Date();
 
-  await Ticket.updateMany(
-    { service: service._id, dateKey: today, status: 'called', room },
-    { $set: { status: 'done', doneAt: now } }
-  );
+  const inRoom = { service: service._id, dateKey: today, status: 'called', room };
+  const finishing = await Ticket.find(inRoom).select('_id service');
+  await Ticket.updateMany(inRoom, { $set: { status: 'done', doneAt: now } });
+  finishing.forEach((t) => log(t, 'done', staff, room));
 
   const next = await Ticket.findOneAndUpdate(
     { service: service._id, dateKey: today, status: 'waiting' },

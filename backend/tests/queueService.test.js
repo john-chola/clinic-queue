@@ -33,15 +33,17 @@ beforeEach(() => {
     return next;
   });
 
-  // notifyNearlyUp reads with .find().sort().limit() — return a chained stub.
+  // notifyNearlyUp reads with .find().sort().limit() and callNext with .find().select(): return a chained stub.
   jest.spyOn(Ticket, 'find').mockImplementation((q) => {
     const matched = tickets.filter((t) => {
       if (q.service !== undefined && String(t.service) !== String(q.service)) return false;
       if (q.dateKey !== undefined && t.dateKey !== q.dateKey) return false;
       if (q.status !== undefined && t.status !== q.status) return false;
+      if (q.room !== undefined && t.room !== q.room) return false;
       return true;
     });
     return {
+      select: async () => matched,
       sort: () => ({
         limit: (n) => [...matched].sort(compareQueueOrder).slice(0, n),
       }),
@@ -105,6 +107,15 @@ describe('calling the next patient', () => {
     expect(two.name).toBe('first');
     expect(one.status).toBe('done');
     expect(one.doneAt).toBeInstanceOf(Date);
+  });
+
+  test('finishing the previous patient is written to the event log', async () => {
+    await join({ name: 'first' });
+    await join({ name: 'second' });
+    const one = await queue.callNext('svc1', 'Room 1');
+    await queue.callNext('svc1', 'Room 1');
+    const done = QueueEvent.create.mock.calls.map((c) => c[0]).filter((e) => e.action === 'done');
+    expect(done).toEqual([expect.objectContaining({ ticket: one._id, room: 'Room 1' })]);
   });
 
   test('two rooms pressing Next at the same moment get different patients', async () => {

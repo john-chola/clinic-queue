@@ -1,6 +1,7 @@
 const express = require('express');
 const auth = require('../controllers/authController');
 const q = require('../controllers/queueController');
+const reports = require('../controllers/reportController');
 const { protect, restrictTo } = require('../middleware/auth');
 const { joinLimiter, loginLimiter } = require('../middleware/rateLimiter');
 
@@ -22,5 +23,6 @@ router.get('/auth/me', protect, auth.me);
 router.post('/staff/services/:id/tickets', protect, restrictTo('admin', 'receptionist'), q.addWalkIn);
 router.post('/staff/services/:id/next', protect, restrictTo('admin', 'clinician', 'receptionist'), q.callNext);
 router.post('/staff/tickets/:id/:action', protect, q.ticketAction);
+router.get('/staff/reports/daily', protect, restrictTo('admin'), reports.daily);
 
 module.exports = router;

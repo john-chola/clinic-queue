@@ -33,6 +33,7 @@ const ticketSchema = new mongoose.Schema(
 // The queue order: priority first, then first come, first served
 ticketSchema.index({ service: 1, dateKey: 1, status: 1, priority: -1, createdAt: 1 });
 ticketSchema.index({ service: 1, dateKey: 1, number: 1 }, { unique: true });
+ticketSchema.index({ dateKey: 1 });   // daily report across every service
 
 ticketSchema.statics.STATUSES = STATUSES;
 
