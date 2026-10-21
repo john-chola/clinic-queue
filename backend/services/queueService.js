@@ -89,40 +89,49 @@ const callNext = async (serviceId, room, staff) => {
   return next;   // null when nobody is waiting
 };
 
-const notifyNearlyUp = async (serviceId) => {
-  // "Today" window - local midnight to next midnight
-  const  startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new  Date(startOfDay);
-  endOfDay.setDate(endOfDay.getDate() + 1);
+// backend/services/queueService.js
 
+async function notifyNearlyUp(serviceId) {
+  // Bug 3 fix: use the shared dateKey helper, not the server's midnight
   const firstThree = await Ticket.find({
-    service: serviceId,
+    serviceId,
     status: 'waiting',
-    notifiedAt: { $exists: false },
-    createdAt: { $gte: startOfDay, $lt: endOfDay },
-  }).sort(QUEUE_ORDER)
-  .limit(3)
-  .lean();
+    dateKey: dateKey(),
+  })
+    .sort(QUEUE_ORDER)
+    // Bug 2 fix: nothing about notifiedAt in the query.
+    // We want the first 3 in line, then skip already-notified ones below.
+    .limit(3)
+    .lean();
 
-  const results = [];
+  for (let i = 0; i < firstThree.length; i++) {
+    const ticket = firstThree[i];
+    const position = i + 1; // 1, 2, or 3
 
-  for (const ticket of firstThree) {
-    if (ticket.phone || ticket.notifiedAt) continue; // Skip if no phone or already notified{
-      
+    // Bug 1 fix: skip if NO phone, or already notified
+    if (!ticket.phone || ticket.notifiedAt) continue;
+
     try {
-      await sendSms(ticket.phone, `Your ticket ${ticket.code} is nearly up. Please be ready to go to the room when called.`);
-      await Ticket.updateOne({ _id: ticket._id }, { $set: { notifiedAt: new Date() } });
-      console.log(`Notified ticket ${ticket.code} at ${ticket.phone}`);
-    }
+      await sendSms(
+        ticket.phone,
+        `Clinic Queue: ${ticket.code}, you are ${position}${ordinal(position)} in line for ${serviceId}. Please return to the waiting area.`
+      );
 
-    catch (error) {
-      console.error(`Failed to notify ticket ${ticket.code} at ${ticket.phone}:`, error.message);
+      // Guarded update so an overlapping run can't double-text
+      await Ticket.updateOne(
+        { _id: ticket._id, notifiedAt: { $exists: false } },
+        { $set: { notifiedAt: new Date() } }
+      );
+    } catch (err) {
+      // One bad number must not stop the queue
+      console.error(`notifyNearlyUp: SMS failed for ${ticket._id}`, err);
     }
   }
+}
 
-  return results;
-};
+function ordinal(n) {
+  return n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
+}
 
 // ── Actions on one ticket ───────────────────────────────────
 const TRANSITIONS = {
@@ -247,4 +256,4 @@ const ticketStatus = async (publicId) => {
   };
 };
 
-module.exports = { issueTicket, callNext, applyAction, cancelByPatient, snapshot, ticketStatus, TRANSITIONS, QUEUE_ORDER };
+module.exports = { issueTicket, callNext, applyAction, notifyNearlyUp,  cancelByPatient, snapshot, ticketStatus, TRANSITIONS, QUEUE_ORDER };

@@ -46,6 +46,10 @@ exports.cancelOwnTicket = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+notifyNearlyUp(ticket.serviceId).catch(err =>
+  console.error('notifyNearlyUp failed (cancelOwnTicket):', err)
+);
+
 // ── Staff ───────────────────────────────────────────────────
 
 // POST /api/staff/services/:id/tickets  { name?, phone?, priority?, priorityReason? }: walk-in at reception
@@ -70,6 +74,10 @@ exports.callNext = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+notifyNearlyUp(serviceId).catch(err =>
+  console.error('notifyNearlyUp failed (callNext):', err)
+);
+
 // POST /api/staff/tickets/:id/:action  (recall | done | no_show | cancel | return)
 exports.ticketAction = async (req, res, next) => {
   try {
@@ -77,5 +85,8 @@ exports.ticketAction = async (req, res, next) => {
     const extra = req.params.action === 'recall' ? { called: { code: ticket.code, room: ticket.room } } : {};
     emitQueueChanged(ticket.service, extra);
     res.json({ status: 'success', ticket: { _id: ticket._id, code: ticket.code, status: ticket.status } });
+    notifyNearlyUp(ticket.serviceId).catch(err =>
+      console.error('notifyNearlyUp failed (ticketAction):', err)
+    );
   } catch (err) { next(err); }
 };

@@ -117,3 +117,35 @@ describe('ticket actions', () => {
     await expect(queue.applyAction('x', 'dance')).rejects.toMatchObject({ statusCode: 400 });
   });
 });
+
+describe('notifyNearlyUp', () => {
+  it('texts the first 3 waiting patients who have phones', async () => {
+    // fakes already set up in this file, e.g.:
+    //   A-021 (phone)
+    //   A-022 (no phone)
+    //   A-023 (phone)
+    //   A-024 (phone)
+    //   -> 4 waiting, 3 with phones
+    const spy = jest.spyOn(sms, 'sendSms').mockResolvedValue(undefined);
+
+    await queueService.notifyNearlyUp('OPD');
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy.mock.calls.map(c => c[0])).toEqual([
+      '+260...021',
+      '+260...023',
+      '+260...024',
+    ]);
+  });
+
+  it('does nothing on a second call — everyone is already notified', async () => {
+    const spy = jest.spyOn(sms, 'sendSms').mockResolvedValue(undefined);
+
+    await queueService.notifyNearlyUp('OPD');
+    await queueService.notifyNearlyUp('OPD');
+
+    expect(spy).toHaveBeenCalledTimes(3); // not 6
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+});
