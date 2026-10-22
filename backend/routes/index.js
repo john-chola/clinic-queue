@@ -2,6 +2,7 @@ const express = require('express');
 const auth = require('../controllers/authController');
 const q = require('../controllers/queueController');
 const reports = require('../controllers/reportController');
+const admin = require('../controllers/adminController');
 const { protect, restrictTo } = require('../middleware/auth');
 const { joinLimiter, loginLimiter } = require('../middleware/rateLimiter');
 
@@ -25,5 +26,15 @@ router.post('/staff/services/:id/next', protect, restrictTo('admin', 'clinician'
 router.post('/staff/tickets/:id/transfer', protect, restrictTo('admin', 'clinician', 'receptionist'), q.transferTicket);
 router.post('/staff/tickets/:id/:action', protect, q.ticketAction);
 router.get('/staff/reports/daily', protect, restrictTo('admin'), reports.daily);
+
+// Admin: services, rooms and staff accounts
+const adminOnly = [protect, restrictTo('admin')];
+router.get('/admin/services', adminOnly, admin.listServices);
+router.post('/admin/services', adminOnly, admin.createService);
+router.patch('/admin/services/:id', adminOnly, admin.updateService);
+router.delete('/admin/services/:id', adminOnly, admin.deleteService);
+router.get('/admin/staff', adminOnly, admin.listStaff);
+router.post('/admin/staff', adminOnly, admin.createStaff);
+router.patch('/admin/staff/:id', adminOnly, admin.updateStaff);
 
 module.exports = router;
