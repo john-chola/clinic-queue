@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useQueueEvents } from '../lib/live'
-import { forgetTicket } from '../lib/myTickets'
+import { forgetTicket, rememberTicket } from '../lib/myTickets'
 
 // The patient's own ticket: place in line, estimate, and an alert when called
 export default function TicketPage() {
   const { publicId } = useParams()
+  const navigate = useNavigate()
   const [ticket, setTicket] = useState(null)
   const [error, setError] = useState('')
   const lastStatus = useRef(null)
@@ -27,6 +28,15 @@ export default function TicketPage() {
     document.title = ticket.status === 'called' ? `🔔 Your turn: ${ticket.room}` : `${ticket.code} · Clinic Queue`
   }, [ticket])
 
+  // Sent on to another service: follow the link to the new ticket, and remember that one instead
+  const next = ticket?.next
+  useEffect(() => {
+    if (!next) return
+    forgetTicket(publicId)
+    rememberTicket(next.publicId, next.code, next.service)
+    navigate(`/t/${next.publicId}`, { replace: true })
+  }, [next, publicId, navigate])
+
   const cancel = async () => {
     if (!window.confirm('Leave the queue? You will lose your place.')) return
     try {
@@ -45,6 +55,15 @@ export default function TicketPage() {
       <p className="ticket__service">{ticket.service.name}</p>
       <p className="ticket__code" aria-label={`Ticket ${ticket.code}`}>{ticket.code}</p>
       {ticket.name && <p className="muted center">{ticket.name}</p>}
+      {ticket.from && <p className="hint center">Sent on from {ticket.from.service} ({ticket.from.code}). You kept your place from when you arrived.</p>}
+
+      {next && (
+        <section className="card card--accent center">
+          <p className="h3">Please go to {next.service}</p>
+          <p>Your new number is <strong>{next.code}</strong></p>
+          <Link className="btn btn--primary" to={`/t/${next.publicId}`} replace>Open my {next.service} ticket</Link>
+        </section>
+      )}
 
       {s === 'waiting' && (
         <section className="card center">
@@ -69,7 +88,7 @@ export default function TicketPage() {
         </section>
       )}
 
-      {s === 'done' && <section className="card center"><p className="h3">Thank you. You have been seen.</p></section>}
+      {s === 'done' && !next && <section className="card center"><p className="h3">Thank you. You have been seen.</p></section>}
       {s === 'no_show' && (
         <section className="card center">
           <p className="h3">You missed your call</p>

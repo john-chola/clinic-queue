@@ -23,6 +23,14 @@ const ticketSchema = new mongoose.Schema(
     room:   { type: String, default: '' },
     calls:  { type: Number, default: 0 },                // how many times it has been announced
      
+    // When the patient first arrived at the clinic today. The queue is ordered by this,
+    // so a patient sent on from another service keeps the place they earned by coming early.
+    arrivedAt: { type: Date, default: Date.now },
+    // A patient sent on to another service (OPD → Lab → Pharmacy) gets a new ticket there.
+    // The two tickets point at each other, so either one leads to the other.
+    fromTicket:    { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' },
+    transferredTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' },
+
     notifiedAt: Date,  // when the "you're nearly up" SMS was sent
     calledAt: Date,
     doneAt:   Date,
@@ -30,8 +38,8 @@ const ticketSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// The queue order: priority first, then first come, first served
-ticketSchema.index({ service: 1, dateKey: 1, status: 1, priority: -1, createdAt: 1 });
+// The queue order: priority first, then by arrival at the clinic
+ticketSchema.index({ service: 1, dateKey: 1, status: 1, priority: -1, arrivedAt: 1, createdAt: 1 });
 ticketSchema.index({ service: 1, dateKey: 1, number: 1 }, { unique: true });
 ticketSchema.index({ dateKey: 1 });   // daily report across every service
 

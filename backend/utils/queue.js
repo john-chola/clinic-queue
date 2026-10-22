@@ -42,10 +42,16 @@ const describeWait = (minutes) => {
   return `about ${h} hour${h > 1 ? 's' : ''}${m ? ` ${m} minutes` : ''}`;
 };
 
-// Queue order: priority patients first, then first come, first served
+// When the patient first arrived at the clinic (tickets made before arrivedAt existed fall back to createdAt)
+const arrivalTime = (t) => new Date(t.arrivedAt || t.createdAt);
+
+// Queue order: priority patients first, then by arrival at the clinic, so a patient
+// sent on from another service keeps their place. Ties go to the older ticket.
 const compareQueueOrder = (a, b) =>
-  (b.priority === true) - (a.priority === true) || new Date(a.createdAt) - new Date(b.createdAt);
+  (b.priority === true) - (a.priority === true)
+  || arrivalTime(a) - arrivalTime(b)
+  || new Date(a.createdAt) - new Date(b.createdAt);
 
 module.exports = {
-  TIME_ZONE, RECENT_SAMPLE, dateKey, formatCode, averageServiceMinutes, estimateWaitMinutes, describeWait, compareQueueOrder,
+  TIME_ZONE, RECENT_SAMPLE, dateKey, formatCode, averageServiceMinutes, estimateWaitMinutes, describeWait, arrivalTime, compareQueueOrder,
 };
