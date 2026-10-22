@@ -1,5 +1,6 @@
 // All queue changes go through here, so the rules live in one place.
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const Ticket = require('../models/Ticket');
 const Counter = require('../models/Counter');
 const Service = require('../models/Service');
@@ -8,12 +9,13 @@ const httpError = require('../utils/httpError');
 const { normalizePhone, isValidPhone } = require('../utils/phone');
 const { sendSms } = require('../utils/sms');
 const {
-  dateKey, formatCode, averageServiceMinutes, estimateWaitMinutes, describeWait,
+  dateKey, formatCode, averageServiceMinutes, estimateWaitMinutes, describeWait, arrivalTime,
 } = require('../utils/queue');
 
 const ACTIVE_ROOM_WINDOW_MS = 30 * 60 * 1000;   // a room that called someone in the last 30 min is "working"
-const QUEUE_ORDER = { priority: -1, createdAt: 1 };
+const QUEUE_ORDER = { priority: -1, arrivedAt: 1, createdAt: 1 };
 const NEARLY_UP_COUNT = 3;                       // how many at the front get a "nearly up" text
+const RETURNED_REASON = 'Returned after missing the call';
 
 const log = (ticket, action, staff, room = '') =>
   QueueEvent.create({ ticket: ticket._id, service: ticket.service, action, staff: staff?._id, room })
@@ -44,18 +46,7 @@ const issueTicket = async (serviceId, { name = '', phone = '', priority = false,
     if (existing) return { ticket: existing, existing: true };
   }
 
-  const counter = await Counter.findOneAndUpdate(
-    { _id: `${service._id}:${today}` },
-    { $inc: { seq: 1 } },
-    { new: true, upsert: true }
-  );
-
-  const ticket = await Ticket.create({
-    service: service._id,
-    dateKey: today,
-    number: counter.seq,
-    code: formatCode(service.prefix, counter.seq),
-    publicId: crypto.randomBytes(9).toString('base64url'),
+  const ticket = await createTicket(service, {
     name: String(name).trim().slice(0, 60),
     phone: cleanPhone,
     source,
@@ -64,6 +55,25 @@ const issueTicket = async (serviceId, { name = '', phone = '', priority = false,
   });
   log(ticket, 'joined', staff);
   return { ticket, existing: false };
+};
+
+// The next number in this service's queue today, and the ticket that goes with it
+const createTicket = async (service, fields) => {
+  const today = dateKey();
+  const counter = await Counter.findOneAndUpdate(
+    { _id: `${service._id}:${today}` },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return Ticket.create({
+    arrivedAt: new Date(),
+    ...fields,
+    service: service._id,
+    dateKey: today,
+    number: counter.seq,
+    code: formatCode(service.prefix, counter.seq),
+    publicId: crypto.randomBytes(9).toString('base64url'),
+  });
 };
 
 // ── Call the next patient to a room ─────────────────────────
@@ -115,12 +125,72 @@ const applyAction = async (ticketId, action, staff) => {
   if (action === 'done') ticket.doneAt = now;
   if (action === 'return') {
     ticket.priority = true;
-    ticket.priorityReason = ticket.priorityReason || 'Returned after missing the call';
+    ticket.priorityReason = ticket.priorityReason || RETURNED_REASON;
     ticket.room = '';
   }
   await ticket.save();
   log(ticket, rule.event, staff, ticket.room);
   return ticket;
+};
+
+// ── Send a patient on to another service ────────────────────
+// OPD → Lab → Pharmacy. The patient is finished here and gets a new ticket in the
+// next service's queue, linked to this one both ways. They keep their place: queues
+// are ordered by arrival at the clinic, and the new ticket carries the old arrivedAt.
+const transferTicket = async (ticketId, toServiceId, staff) => {
+  const ticket = await Ticket.findById(ticketId);
+  if (!ticket) throw httpError(404, 'Ticket not found');
+  if (ticket.transferredTo) throw httpError(409, `${ticket.code} has already been sent on`);
+  if (!['called', 'done'].includes(ticket.status)) {
+    throw httpError(409, `Only a patient who has been called can be sent on (${ticket.code} is ${ticket.status.replace('_', '-')})`);
+  }
+  if (ticket.dateKey !== dateKey()) throw httpError(409, `${ticket.code} is from an earlier day`);
+  if (!toServiceId) throw httpError(400, 'Choose the service to send the patient to');
+  const to = await findService(toServiceId);
+  if (String(to._id) === String(ticket.service)) throw httpError(400, `${ticket.code} is already in ${to.name}`);
+  if (!to.isOpen) throw httpError(409, `${to.name} is not taking patients right now`);
+  if (ticket.phone) {
+    const existing = await Ticket.findOne({ service: to._id, dateKey: ticket.dateKey, phone: ticket.phone, status: { $in: ['waiting', 'called'] } });
+    if (existing) throw httpError(409, `This patient is already in the ${to.name} queue as ${existing.code}`);
+  }
+
+  // How to put the old ticket back if the new one cannot be made
+  const undo = ticket.status === 'called'
+    ? { $set: { status: 'called' }, $unset: { transferredTo: 1, doneAt: 1 } }
+    : { $unset: { transferredTo: 1 } };
+
+  // Claim the old ticket in one atomic step, so a double tap (or two staff at once)
+  // cannot make two new tickets: only one update can find transferredTo still empty.
+  const newId = new mongoose.Types.ObjectId();
+  const from = await Ticket.findOneAndUpdate(
+    { _id: ticket._id, status: { $in: ['called', 'done'] }, transferredTo: null },
+    { $set: { status: 'done', doneAt: ticket.doneAt || new Date(), transferredTo: newId } },
+    { new: true }
+  );
+  if (!from) throw httpError(409, `${ticket.code} has already been sent on`);
+
+  let next;
+  try {
+    next = await createTicket(to, {
+      _id: newId,
+      name: ticket.name,
+      phone: ticket.phone,
+      source: 'reception',
+      // Priority belongs to the patient (pregnant, elderly…), except the one-off
+      // priority given for returning after a missed call
+      priority: ticket.priority && ticket.priorityReason !== RETURNED_REASON,
+      priorityReason: ticket.priorityReason !== RETURNED_REASON ? ticket.priorityReason : '',
+      arrivedAt: arrivalTime(ticket),
+      fromTicket: ticket._id,
+    });
+  } catch (err) {
+    // Put the old ticket back as it was, so the transfer can be tried again
+    await Ticket.updateOne({ _id: ticket._id }, undo);
+    throw err;
+  }
+  log(from, 'transferred', staff, from.room);
+  log(next, 'joined', staff);
+  return { from, to: next, service: to };
 };
 
 // A patient may cancel their own ticket from their phone
@@ -183,13 +253,19 @@ const activeRoomCount = async (serviceId, today) => {
   return Math.max(1, rooms.length);
 };
 
+// A populated fromTicket / transferredTo, as { code, service, publicId? }
+const linked = (t, { withLink = false } = {}) => (t?.code
+  ? { code: t.code, service: t.service?.name, ...(withLink && { publicId: t.publicId }) }
+  : null);
+
 // Everything the display screen and staff page need for one service.
 // Staff get names and phones; the public view gets ticket codes only.
 const snapshot = async (serviceOrId, { forStaff = false } = {}) => {
   const service = serviceOrId._id ? serviceOrId : await findService(serviceOrId);
   const today = dateKey();
   const [waiting, called, served, rooms, missed] = await Promise.all([
-    Ticket.find({ service: service._id, dateKey: today, status: 'waiting' }).sort(QUEUE_ORDER),
+    Ticket.find({ service: service._id, dateKey: today, status: 'waiting' }).sort(QUEUE_ORDER)
+      .populate(forStaff ? { path: 'fromTicket', select: 'code service', populate: { path: 'service', select: 'name' } } : []),
     Ticket.find({ service: service._id, dateKey: today, status: 'called' }).sort({ calledAt: -1 }),
     recentServed(service._id, today),
     activeRoomCount(service._id, today),
@@ -199,7 +275,8 @@ const snapshot = async (serviceOrId, { forStaff = false } = {}) => {
   const pub = (t) => ({ code: t.code, room: t.room, priority: t.priority, calls: t.calls });
   const staffView = (t) => ({
     ...pub(t), _id: t._id, name: t.name, phone: t.phone, priorityReason: t.priorityReason,
-    source: t.source, createdAt: t.createdAt, calledAt: t.calledAt,
+    source: t.source, createdAt: t.createdAt, arrivedAt: arrivalTime(t), calledAt: t.calledAt,
+    from: linked(t.fromTicket),
   });
   const view = forStaff ? staffView : pub;
   return {
@@ -218,21 +295,29 @@ const snapshot = async (serviceOrId, { forStaff = false } = {}) => {
 
 // One patient's view of their own ticket
 const ticketStatus = async (publicId) => {
-  const ticket = await Ticket.findOne({ publicId }).populate('service', 'name prefix rooms defaultMinutes');
+  const withService = (path, select) => ({ path, select: `${select} service`, populate: { path: 'service', select: 'name' } });
+  const ticket = await Ticket.findOne({ publicId })
+    .populate('service', 'name prefix rooms defaultMinutes')
+    .populate(withService('fromTicket', 'code'))
+    .populate(withService('transferredTo', 'code publicId'));
   if (!ticket) throw httpError(404, 'Ticket not found');
   const service = ticket.service;
   const result = {
     code: ticket.code, status: ticket.status, room: ticket.room, priority: ticket.priority,
     name: ticket.name, service: { _id: service._id, name: service.name }, createdAt: ticket.createdAt, calledAt: ticket.calledAt,
+    from: linked(ticket.fromTicket),
+    // Sent on to another service: the patient's page follows this to the new ticket
+    next: linked(ticket.transferredTo, { withLink: true }),
   };
   if (ticket.status !== 'waiting') return result;
 
   const today = ticket.dateKey;
+  // Everyone before this ticket in compareQueueOrder: priority first, then earlier arrival
+  const arrived = arrivalTime(ticket);
+  const arrivedEarlier = { $or: [{ arrivedAt: { $lt: arrived } }, { arrivedAt: arrived, createdAt: { $lt: ticket.createdAt } }] };
   const ahead = await Ticket.countDocuments({
     service: service._id, dateKey: today, status: 'waiting',
-    $or: ticket.priority
-      ? [{ priority: true, createdAt: { $lt: ticket.createdAt } }]
-      : [{ priority: true }, { createdAt: { $lt: ticket.createdAt } }],
+    ...(ticket.priority ? { priority: true, ...arrivedEarlier } : { $or: [{ priority: true }, arrivedEarlier] }),
   });
   const [served, rooms, nowServing] = await Promise.all([
     recentServed(service._id, today),
@@ -252,7 +337,7 @@ const ticketStatus = async (publicId) => {
 };
 
 module.exports = {
-  issueTicket, callNext, applyAction, cancelByPatient,
+  issueTicket, callNext, applyAction, transferTicket, cancelByPatient,
   snapshot, ticketStatus, notifyNearlyUp,
   TRANSITIONS, QUEUE_ORDER,
 };

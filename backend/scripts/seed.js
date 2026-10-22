@@ -9,7 +9,7 @@ const Service = require('../models/Service');
 const Staff = require('../models/Staff');
 const Ticket = require('../models/Ticket');
 const Counter = require('../models/Counter');
-const { issueTicket, callNext } = require('../services/queueService');
+const { issueTicket, callNext, transferTicket } = require('../services/queueService');
 const { dateKey } = require('../utils/queue');
 
 const PASSWORD = 'clinic123';
@@ -27,6 +27,7 @@ const STAFF = [
 ];
 
 const PATIENTS = ['Chanda M.', 'Mutale K.', 'Bwalya N.', 'Mwila S.', 'Natasha P.', 'Joseph T.', 'Grace L.', 'Peter Z.'];
+const PHARMACY_PATIENTS = ['Bupe C.', 'Kelvin M.', 'Ruth B.'];
 
 (async () => {
   if (!process.env.MONGODB_URI) { console.error('Set MONGODB_URI in backend/.env first'); process.exit(1); }
@@ -50,13 +51,14 @@ const PATIENTS = ['Chanda M.', 'Mutale K.', 'Bwalya N.', 'Mwila S.', 'Natasha P.
     await Counter.deleteMany({ _id: { $regex: `:${today}$` } });
     const [opd, pharmacy] = services;
     for (const name of PATIENTS) await issueTicket(opd._id, { name }, { source: 'reception' });
-    for (const name of PATIENTS.slice(0, 3)) await issueTicket(pharmacy._id, { name }, { source: 'reception' });
+    for (const name of PHARMACY_PATIENTS) await issueTicket(pharmacy._id, { name }, { source: 'reception' });
     const ago = (min) => new Date(Date.now() - min * 60000);
     // Spread the joining times over the last 70 minutes, in queue order, so nobody is called
     // before they joined. Through the raw collection: Mongoose will not change createdAt.
+    // arrivedAt too, since the queue is ordered by it.
     for (const [service, from] of [[opd, 70], [pharmacy, 40]]) {
       const tickets = await Ticket.find({ service: service._id, dateKey: today }).sort({ number: 1 });
-      for (const [i, t] of tickets.entries()) await Ticket.collection.updateOne({ _id: t._id }, { $set: { createdAt: ago(from - i * 8) } });
+      for (const [i, t] of tickets.entries()) await Ticket.collection.updateOne({ _id: t._id }, { $set: { createdAt: ago(from - i * 8), arrivedAt: ago(from - i * 8) } });
     }
     // Three patients already seen, taking 6 to 9 minutes each, so the wait estimate has real data
     for (let i = 0; i < 3; i++) {
@@ -66,6 +68,10 @@ const PATIENTS = ['Chanda M.', 'Mutale K.', 'Bwalya N.', 'Mwila S.', 'Natasha P.
     }
     await callNext(opd._id, 'Room 1');
     await callNext(opd._id, 'Room 2');
+    // The first patient seen in OPD was sent on to Pharmacy, and is at the front there:
+    // they arrived at the clinic before anyone in the Pharmacy queue
+    const [firstSeen] = await Ticket.find({ service: opd._id, dateKey: today, status: 'done' }).sort({ arrivedAt: 1 }).limit(1);
+    await transferTicket(firstSeen._id, pharmacy._id);
     console.log(`✅ Demo patients added for ${today}`);
   }
 

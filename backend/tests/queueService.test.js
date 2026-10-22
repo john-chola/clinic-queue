@@ -10,23 +10,33 @@ const { compareQueueOrder, dateKey } = require('../utils/queue');
 const sms = require('../utils/sms');
 
 const SERVICE = { _id: 'svc1', name: 'OPD', prefix: 'A', rooms: ['Room 1', 'Room 2'], isOpen: true, defaultMinutes: 6 };
+const LAB = { _id: 'svc2', name: 'Lab', prefix: 'L', rooms: ['Lab 1'], isOpen: true, defaultMinutes: 4 };
+const SERVICES = { svc1: SERVICE, svc2: LAB };
 
 let tickets;
 let seq;
 beforeEach(() => {
   tickets = [];
   seq = 0;
-  jest.spyOn(Service, 'findById').mockImplementation(async (id) => (id === 'svc1' ? { ...SERVICE } : null));
+  jest.spyOn(Service, 'findById').mockImplementation(async (id) => (SERVICES[id] ? { ...SERVICES[id] } : null));
   jest.spyOn(QueueEvent, 'create').mockResolvedValue({});
-  jest.spyOn(Counter, 'findOneAndUpdate').mockImplementation(async () => ({ seq: ++seq }));
+  // One counter per service, like the real `${serviceId}:${day}` counters
+  const counters = {};
+  jest.spyOn(Counter, 'findOneAndUpdate').mockImplementation(async (q) => { counters[q._id] = (counters[q._id] || 0) + 1; seq += 1; return { seq: counters[q._id] }; });
   jest.spyOn(Ticket, 'create').mockImplementation(async (d) => { const t = { _id: `t${tickets.length + 1}`, createdAt: new Date(Date.now() + tickets.length), calls: 0, status: 'waiting', ...d }; tickets.push(t); return t; });
-  jest.spyOn(Ticket, 'findOne').mockImplementation(async (q) => tickets.find((t) => t.phone === q.phone && q.status.$in.includes(t.status)) || null);
+  jest.spyOn(Ticket, 'findOne').mockImplementation(async (q) =>
+    tickets.find((t) => String(t.service) === String(q.service) && t.phone === q.phone && q.status.$in.includes(t.status)) || null);
+  jest.spyOn(Ticket, 'findById').mockImplementation(async (id) => tickets.find((t) => t._id === String(id)) || null);
   jest.spyOn(Ticket, 'updateMany').mockImplementation(async (q, u) => {
-    tickets.filter((t) => t.status === q.status && t.room === q.room).forEach((t) => Object.assign(t, u.$set));
+    tickets.filter((t) => String(t.service) === String(q.service) && t.status === q.status && t.room === q.room).forEach((t) => Object.assign(t, u.$set));
   });
   // Like MongoDB: find, sort and update happen as one step, with no await in between
   jest.spyOn(Ticket, 'findOneAndUpdate').mockImplementation(async (q, u) => {
-    const next = tickets.filter((t) => t.status === q.status).sort(compareQueueOrder)[0];
+    if (q._id) {   // claiming one ticket for a transfer: { transferredTo: null } matches null or missing
+      const t = tickets.find((tk) => tk._id === String(q._id) && q.status.$in.includes(tk.status) && tk.transferredTo == null);
+      return t ? Object.assign(t, u.$set) : null;
+    }
+    const next = tickets.filter((t) => String(t.service) === String(q.service) && t.status === q.status).sort(compareQueueOrder)[0];
     if (!next) return null;
     Object.assign(next, u.$set);
     next.calls += u.$inc.calls;
@@ -55,6 +65,7 @@ beforeEach(() => {
     if (!t) return { modifiedCount: 0 };
     if (q.notifiedAt === null && t.notifiedAt != null) return { modifiedCount: 0 };
     Object.assign(t, u.$set);
+    Object.keys(u.$unset || {}).forEach((k) => delete t[k]);
     return { modifiedCount: 1 };
   });
 
@@ -156,6 +167,98 @@ describe('ticket actions', () => {
     stored({ status: 'waiting' });
     await expect(queue.applyAction('x', 'done')).rejects.toMatchObject({ statusCode: 409 });
     await expect(queue.applyAction('x', 'dance')).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('sending a patient on to another service', () => {
+  const at = (h, m) => new Date(2026, 9, 22, h, m);
+  const joinLab = (data = {}) => queue.issueTicket('svc2', data);
+  // A patient who arrived at OPD at 08:00 and is now in Room 1
+  const seenInOpd = async (data = {}) => {
+    const { ticket } = await join({ name: 'Mwila', phone: '0971234567', ...data });
+    ticket.arrivedAt = at(8, 0);
+    return queue.callNext('svc1', 'Room 1');
+  };
+
+  test('makes a linked ticket in the other queue and finishes the patient here', async () => {
+    const opd = await seenInOpd();
+    const { from, to, service } = await queue.transferTicket(opd._id, 'svc2');
+
+    expect(service.name).toBe('Lab');
+    expect(to).toMatchObject({ service: 'svc2', code: 'L-001', status: 'waiting', name: 'Mwila', phone: '+260971234567' });
+    expect(to.publicId).not.toBe(opd.publicId);
+    // Linked both ways
+    expect(String(to.fromTicket)).toBe(opd._id);
+    expect(String(from.transferredTo)).toBe(String(to._id));
+    // Seen in OPD, so finished there; the room is free for the next patient
+    expect(opd).toMatchObject({ status: 'done' });
+    expect(opd.doneAt).toBeInstanceOf(Date);
+    const events = QueueEvent.create.mock.calls.map((c) => c[0].action);
+    expect(events).toEqual(expect.arrayContaining(['transferred', 'joined']));
+  });
+
+  test('keeps their place: the Lab queue is ordered by arrival at the clinic', async () => {
+    (await joinLab({ name: 'before' })).ticket.arrivedAt = at(7, 50);
+    (await joinLab({ name: 'after' })).ticket.arrivedAt = at(9, 30);
+    const opd = await seenInOpd();
+    await queue.transferTicket(opd._id, 'svc2');
+
+    const order = [];
+    for (let i = 0; i < 3; i += 1) order.push((await queue.callNext('svc2', 'Lab 1')).name);
+    expect(order).toEqual(['before', 'Mwila', 'after']);
+  });
+
+  test('priority goes with the patient, but not the one-off priority for returning late', async () => {
+    const { ticket: pregnant } = await join({ name: 'P', priority: true, priorityReason: 'Pregnant' }, { source: 'reception' });
+    pregnant.status = 'called';
+    const { to } = await queue.transferTicket(pregnant._id, 'svc2');
+    expect(to).toMatchObject({ priority: true, priorityReason: 'Pregnant' });
+
+    const { ticket: late } = await join({ name: 'L' });
+    Object.assign(late, { status: 'called', priority: true, priorityReason: 'Returned after missing the call' });
+    const { to: lateTo } = await queue.transferTicket(late._id, 'svc2');
+    expect(lateTo).toMatchObject({ priority: false, priorityReason: '' });
+  });
+
+  test('a double tap makes only one new ticket', async () => {
+    const opd = await seenInOpd();
+    const results = await Promise.allSettled([queue.transferTicket(opd._id, 'svc2'), queue.transferTicket(opd._id, 'svc2')]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(results.find((r) => r.status === 'rejected').reason.statusCode).toBe(409);
+    expect(tickets.filter((t) => t.service === 'svc2')).toHaveLength(1);
+  });
+
+  test('if the new ticket cannot be made, the patient is left as they were', async () => {
+    const opd = await seenInOpd();
+    Counter.findOneAndUpdate.mockRejectedValueOnce(new Error('database down'));
+    await expect(queue.transferTicket(opd._id, 'svc2')).rejects.toThrow('database down');
+    expect(opd.status).toBe('called');
+    expect(opd.transferredTo).toBeUndefined();
+    expect(opd.doneAt).toBeUndefined();
+
+    const { to } = await queue.transferTicket(opd._id, 'svc2');   // and it can be tried again
+    expect(to.code).toBe('L-001');
+  });
+
+  test('impossible transfers are refused', async () => {
+    const { ticket: waiting } = await join({ name: 'W' });
+    await expect(queue.transferTicket(waiting._id, 'svc2')).rejects.toMatchObject({ statusCode: 409 });
+    const opd = await seenInOpd();
+    await expect(queue.transferTicket(opd._id, 'svc1')).rejects.toMatchObject({ statusCode: 400 });
+    await expect(queue.transferTicket(opd._id)).rejects.toMatchObject({ statusCode: 400 });
+    await expect(queue.transferTicket(opd._id, 'nope')).rejects.toMatchObject({ statusCode: 404 });
+    await expect(queue.transferTicket('missing', 'svc2')).rejects.toMatchObject({ statusCode: 404 });
+    SERVICES.svc2 = { ...LAB, isOpen: false };
+    try {
+      await expect(queue.transferTicket(opd._id, 'svc2')).rejects.toMatchObject({ statusCode: 409 });
+    } finally { SERVICES.svc2 = LAB; }
+    expect(opd.status).toBe('called');   // nothing was changed by the refusals
+  });
+
+  test('a patient already waiting in that queue is not added twice', async () => {
+    await joinLab({ phone: '0971234567' });
+    const opd = await seenInOpd();
+    await expect(queue.transferTicket(opd._id, 'svc2')).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('L-001') });
   });
 });
 

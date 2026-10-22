@@ -57,3 +57,16 @@ test('priority patients go first, then first come, first served', () => {
     .sort(compareQueueOrder).map((x) => x.code);
   expect(order).toEqual(['A-003', 'A-004', 'A-001', 'A-002']);
 });
+
+test('a patient sent on from another service is placed by when they arrived at the clinic', () => {
+  const t = (code, arrived, created) => ({ code, priority: false, arrivedAt: new Date(2026, 9, 14, 8, arrived), createdAt: new Date(2026, 9, 14, 8, created) });
+  // L-003 was made last (minute 40) but the patient arrived at OPD at minute 5
+  const order = [t('L-001', 10, 10), t('L-002', 20, 20), t('L-003', 5, 40)].sort(compareQueueOrder).map((x) => x.code);
+  expect(order).toEqual(['L-003', 'L-001', 'L-002']);
+});
+
+test('tickets made before arrivedAt existed are ordered by createdAt', () => {
+  const old = { code: 'A-001', priority: false, createdAt: new Date(2026, 9, 14, 8, 0) };
+  const sentOn = { code: 'A-002', priority: false, arrivedAt: new Date(2026, 9, 14, 7, 0), createdAt: new Date(2026, 9, 14, 9, 0) };
+  expect([old, sentOn].sort(compareQueueOrder).map((x) => x.code)).toEqual(['A-002', 'A-001']);
+});

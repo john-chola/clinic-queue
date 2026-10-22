@@ -72,6 +72,7 @@ a { color: var(--teal); }
 
 .badge { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 700; }
 .badge--priority { background: var(--amber-light); color: var(--amber); }
+.badge--from { background: var(--teal-light); color: var(--teal-dark); }
 
 .footer { margin: 28px 0 10px; text-align: center; font-size: 13px; color: var(--muted); }
 
@@ -107,6 +108,8 @@ a { color: var(--teal); }
 .desk__stats { color: var(--muted); font-size: 14px; padding-bottom: 10px; }
 .staff-grid { display: grid; grid-template-columns: 1fr; gap: 0 16px; }
 .current__code { font-size: 64px; font-weight: 900; color: var(--teal-dark); line-height: 1.1; }
+.send-on { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.send-on .btn { flex: 0 0 auto; }
 .issued { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 10px; background: var(--teal-light); margin-bottom: 12px; }
 .issued__code { font-size: 34px; color: var(--teal-dark); }
 .queue-list { list-style: none; padding: 0; }

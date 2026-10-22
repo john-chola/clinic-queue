@@ -21,6 +21,7 @@ export default function StaffPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [sendTo, setSendTo] = useState('')           // service to send the current patient on to
 
   const canAdd = staff && ['admin', 'receptionist'].includes(staff.role)
 
@@ -31,6 +32,8 @@ export default function StaffPage() {
   const serviceId = desk.serviceId && services.some((s) => s._id === desk.serviceId) ? desk.serviceId : services[0]?._id
   const service = services.find((s) => s._id === serviceId)
   const room = service?.rooms.includes(desk.room) ? desk.room : service?.rooms[0]
+  const otherServices = services.filter((s) => s._id !== serviceId)
+  const sendToId = otherServices.some((s) => s._id === sendTo && s.isOpen) ? sendTo : otherServices.find((s) => s.isOpen)?._id
 
   const load = useCallback(() => {
     if (!serviceId) return
@@ -61,6 +64,10 @@ export default function StaffPage() {
 
   const current = queue?.nowServing.find((t) => t.room === room)
   const next = () => run(async () => (await api(`/staff/services/${serviceId}/next`, { method: 'POST', auth: true, body: { room } })).message)
+  const transfer = (e) => {
+    e.preventDefault()
+    run(async () => (await api(`/staff/tickets/${current._id}/transfer`, { method: 'POST', auth: true, body: { serviceId: sendToId } })).message)
+  }
   const act = (ticket, action, label) => run(async () => {
     await api(`/staff/tickets/${ticket._id}/${action}`, { method: 'POST', auth: true })
     return `${ticket.code}: ${label}`
@@ -105,6 +112,16 @@ export default function StaffPage() {
                 <button className="btn" disabled={busy} onClick={() => act(current, 'recall', 'called again')}>Call again</button>
                 <button className="btn btn--danger" disabled={busy} onClick={() => act(current, 'no_show', 'marked as missed')}>Not here</button>
               </div>
+              {otherServices.length > 0 && (
+                <form className="send-on" onSubmit={transfer}>
+                  <label className="field field--inline"><span>Send on to another service (keeps their place)</span>
+                    <select value={sendToId || ''} onChange={(e) => setSendTo(e.target.value)}>
+                      {otherServices.map((s) => <option key={s._id} value={s._id} disabled={!s.isOpen}>{s.name}{s.isOpen ? '' : ' (closed)'}</option>)}
+                    </select>
+                  </label>
+                  <button className="btn" disabled={busy || !sendToId}>Done · send on</button>
+                </form>
+              )}
             </div>
           ) : (
             <div className="current">
@@ -125,8 +142,12 @@ export default function StaffPage() {
             {queue?.waiting.map((t) => (
               <li key={t._id}>
                 <strong>{t.code}</strong>
-                <span className="queue-list__name">{t.name || '—'}{t.priority && <span className="badge badge--priority" title={t.priorityReason}>{t.priorityReason || 'Priority'}</span>}</span>
-                <span className="muted">{minutesSince(t.createdAt)} min</span>
+                <span className="queue-list__name">
+                  {t.name || '—'}
+                  {t.priority && <span className="badge badge--priority" title={t.priorityReason}>{t.priorityReason || 'Priority'}</span>}
+                  {t.from && <span className="badge badge--from" title={`Sent on from ${t.from.service} (${t.from.code})`}>from {t.from.service}</span>}
+                </span>
+                <span className="muted" title={t.from ? 'Since they arrived at the clinic' : undefined}>{minutesSince(t.arrivedAt || t.createdAt)} min</span>
                 <button className="link" disabled={busy} onClick={() => window.confirm(`Cancel ${t.code}?`) && act(t, 'cancel', 'cancelled')}>Cancel</button>
               </li>
             ))}

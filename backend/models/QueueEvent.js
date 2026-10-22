@@ -6,7 +6,7 @@ const queueEventSchema = new mongoose.Schema(
   {
     ticket:  { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true },
     service: { type: mongoose.Schema.Types.ObjectId, ref: 'Service', required: true },
-    action:  { type: String, enum: ['joined', 'called', 'recalled', 'done', 'no_show', 'cancelled', 'returned'], required: true },
+    action:  { type: String, enum: ['joined', 'called', 'recalled', 'done', 'no_show', 'cancelled', 'returned', 'transferred'], required: true },
     staff:   { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
     room:    { type: String, default: '' },
   },

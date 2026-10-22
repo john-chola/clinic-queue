@@ -78,6 +78,21 @@ exports.callNext = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// POST /api/staff/tickets/:id/transfer  { serviceId }: send a patient on to another service, keeping their place
+exports.transferTicket = async (req, res, next) => {
+  try {
+    const { from, to, service } = await queue.transferTicket(req.params.id, req.body?.serviceId, req.staff);
+    emitQueueChanged(from.service);
+    emitQueueChanged(service._id);
+    notifyNearlyUp(service._id);
+    res.status(201).json({
+      status: 'success',
+      ticket: { _id: to._id, publicId: to.publicId, code: to.code, service: { _id: service._id, name: service.name } },
+      message: `${from.code} sent to ${service.name} as ${to.code}`,
+    });
+  } catch (err) { next(err); }
+};
+
 // POST /api/staff/tickets/:id/:action  (recall | done | no_show | cancel | return)
 exports.ticketAction = async (req, res, next) => {
   try {

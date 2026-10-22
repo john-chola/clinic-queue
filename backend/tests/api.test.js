@@ -2,6 +2,7 @@
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 const Staff = require('../models/Staff');
+const Ticket = require('../models/Ticket');
 const { createApp } = require('../app');
 
 process.env.JWT_SECRET = 'test-secret';
@@ -28,6 +29,17 @@ test('a clinician cannot add walk-in patients', async () => {
     .set('Authorization', `Bearer ${tokenFor('s1')}`)
     .send({ name: 'Walk-in' });
   expect(res.status).toBe(403);
+});
+
+test('sending a patient on reaches the transfer handler, not the generic ticket actions', async () => {
+  jest.spyOn(Staff, 'findById').mockResolvedValue({ _id: 's1', role: 'clinician', isActive: true });
+  jest.spyOn(Ticket, 'findById').mockResolvedValue(null);
+  const res = await request(app)
+    .post('/api/staff/tickets/abc/transfer')
+    .set('Authorization', `Bearer ${tokenFor('s1')}`)
+    .send({ serviceId: 'svc2' });
+  expect(res.status).toBe(404);   // "Unknown action" would be a 400
+  expect(res.body.message).toBe('Ticket not found');
 });
 
 test('login needs phone and password', async () => {
