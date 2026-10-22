@@ -1,48 +1,60 @@
-// Daily reports, built from the day's tickets.
-// Tickets rather than QueueEvents: tickets already carry every timestamp, and
-// the event log is only needed for "returned", which tickets do not record.
+// Daily reports, worked out inside MongoDB with aggregation pipelines.
+// The database does the counting and averaging next to the data and sends back
+// one small row per service (and per hour), instead of every ticket of the day.
 const Ticket = require('../models/Ticket');
 const Service = require('../models/Service');
-const QueueEvent = require('../models/QueueEvent');
 const httpError = require('../utils/httpError');
-const { dateKey } = require('../utils/queue');
-const { summarize, buildServiceReport } = require('../utils/report');
+const { TIME_ZONE, dateKey } = require('../utils/queue');
+const { isValidDateKey, buildDailyReport } = require('../utils/report');
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const countWhere = (cond) => ({ $sum: { $cond: [cond, 1, 0] } });
+const statusIs = (status) => ({ $eq: ['$status', status] });
 
-// "2026-10-21" that is a real calendar day ("2026-02-30" is not)
-const isValidDateKey = (s) => {
-  if (!DATE_PATTERN.test(s)) return false;
-  const d = new Date(`${s}T00:00:00Z`);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
-};
+// Counts and average times for each service
+const totalsPipeline = (day) => [
+  { $match: { dateKey: day } },
+  {
+    $group: {
+      _id: '$service',
+      joined: { $sum: 1 },
+      waiting: countWhere(statusIs('waiting')),
+      called: countWhere({ $ifNull: ['$calledAt', false] }),   // everyone who was called, whatever happened next
+      served: countWhere(statusIs('done')),
+      noShows: countWhere(statusIs('no_show')),
+      cancelled: countWhere(statusIs('cancelled')),
+      priority: countWhere('$priority'),
+      // Milliseconds. $subtract gives null when calledAt is missing, and $avg skips nulls,
+      // so these are null when nobody was called (or finished).
+      avgWaitMs: { $avg: { $subtract: ['$calledAt', '$createdAt'] } },
+      avgServiceMs: { $avg: { $cond: [statusIs('done'), { $subtract: ['$doneAt', '$calledAt'] }, null] } },
+    },
+  },
+  { $project: { _id: 0, service: '$_id', joined: 1, waiting: 1, called: 1, served: 1, noShows: 1, cancelled: 1, priority: 1, avgWaitMs: 1, avgServiceMs: 1 } },
+];
 
-// One day's report for one service, or every service plus clinic-wide totals
-const dailyReport = async ({ date, serviceId } = {}) => {
+// Patients joining in each hour, on the clinic's clock (UTC would put everything 2 hours early)
+const hoursPipeline = (day) => [
+  { $match: { dateKey: day } },
+  {
+    $group: {
+      _id: { service: '$service', hour: { $hour: { date: '$createdAt', timezone: TIME_ZONE } } },
+      joined: { $sum: 1 },
+    },
+  },
+  { $project: { _id: 0, service: '$_id.service', hour: '$_id.hour', joined: 1 } },
+];
+
+// One day's report: every service plus clinic-wide totals. date defaults to today in Lusaka.
+const dailyReport = async (date) => {
   const day = date || dateKey();
   if (!isValidDateKey(day)) throw httpError(400, 'Give the date as YYYY-MM-DD, for example 2026-10-21');
 
-  let services;
-  if (serviceId) {
-    const service = await Service.findById(serviceId);
-    if (!service) throw httpError(404, 'Service not found');
-    services = [service];
-  } else {
-    services = await Service.find().sort({ order: 1, name: 1 });
-  }
-
-  const tickets = await Ticket.find({ dateKey: day, service: { $in: services.map((s) => s._id) } })
-    .select('service status source priority room createdAt calledAt doneAt notifiedAt');
-  const returns = tickets.length
-    ? await QueueEvent.find({ action: 'returned', ticket: { $in: tickets.map((t) => t._id) } }).select('service')
-    : [];
-
-  const forService = (list, service) => list.filter((x) => String(x.service) === String(service._id));
-  return {
-    date: day,
-    services: services.map((s) => buildServiceReport(s, forService(tickets, s), forService(returns, s).length)),
-    totals: summarize(tickets, returns.length),
-  };
+  const [services, totals, hours] = await Promise.all([
+    Service.find().sort({ order: 1, name: 1 }),
+    Ticket.aggregate(totalsPipeline(day)),
+    Ticket.aggregate(hoursPipeline(day)),
+  ]);
+  return buildDailyReport({ date: day, services, totals, hours });
 };
 
-module.exports = { dailyReport, isValidDateKey };
+module.exports = { dailyReport, totalsPipeline, hoursPipeline };
