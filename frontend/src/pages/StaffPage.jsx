@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useQueueEvents } from '../lib/live'
 import { clearStaff, getStaff } from '../lib/staffAuth'
@@ -71,6 +71,7 @@ export default function StaffPage() {
       <header className="topbar">
         <span className="brand"><span className="brand__dot" /> Clinic Queue</span>
         <span className="muted">{staff.name} · {staff.role}</span>
+        {staff.role === 'admin' && <Link className="btn btn--ghost btn--small" to="/staff/report">Daily report</Link>}
         <button className="btn btn--ghost btn--small" onClick={() => { clearStaff(); navigate('/staff/login') }}>Log out</button>
       </header>
 

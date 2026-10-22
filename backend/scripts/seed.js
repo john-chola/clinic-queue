@@ -51,8 +51,14 @@ const PATIENTS = ['Chanda M.', 'Mutale K.', 'Bwalya N.', 'Mwila S.', 'Natasha P.
     const [opd, pharmacy] = services;
     for (const name of PATIENTS) await issueTicket(opd._id, { name }, { source: 'reception' });
     for (const name of PATIENTS.slice(0, 3)) await issueTicket(pharmacy._id, { name }, { source: 'reception' });
-    // Three patients already seen, taking 6 to 9 minutes each, so the wait estimate has real data
     const ago = (min) => new Date(Date.now() - min * 60000);
+    // Spread the joining times over the last 70 minutes, in queue order, so nobody is called
+    // before they joined. Through the raw collection: Mongoose will not change createdAt.
+    for (const [service, from] of [[opd, 70], [pharmacy, 40]]) {
+      const tickets = await Ticket.find({ service: service._id, dateKey: today }).sort({ number: 1 });
+      for (const [i, t] of tickets.entries()) await Ticket.collection.updateOne({ _id: t._id }, { $set: { createdAt: ago(from - i * 8) } });
+    }
+    // Three patients already seen, taking 6 to 9 minutes each, so the wait estimate has real data
     for (let i = 0; i < 3; i++) {
       const t = await callNext(opd._id, 'Room 1');
       const start = 45 - i * 12;
