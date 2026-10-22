@@ -79,6 +79,7 @@ export default function StaffPage() {
         <span className="brand"><span className="brand__dot" /> Clinic Queue</span>
         <span className="muted">{staff.name} · {staff.role}</span>
         {staff.role === 'admin' && <Link className="btn btn--ghost btn--small" to="/staff/report">Daily report</Link>}
+        {staff.role === 'admin' && <Link className="btn btn--ghost btn--small" to="/staff/admin">Admin</Link>}
         <button className="btn btn--ghost btn--small" onClick={() => { clearStaff(); navigate('/staff/login') }}>Log out</button>
       </header>
 

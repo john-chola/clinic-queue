@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 
 const staffSchema = new mongoose.Schema(
   {
-    name:     { type: String, required: true, trim: true, maxlength: 60 },
+    name:     { type: String, required: [true, 'Give the staff member a name'], trim: true, maxlength: [60, 'Keep the name under 60 characters'] },
     phone:    { type: String, required: true, unique: true, trim: true },
     password: { type: String, required: true, minlength: 6, select: false },
     // receptionist: adds walk-ins; clinician: calls patients to a room; admin: everything

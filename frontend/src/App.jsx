@@ -8,6 +8,7 @@ import DisplayPage from './pages/DisplayPage'
 
 // Admin only, and the chart library is large: load it only when someone opens the report
 const ReportPage = lazy(() => import('./pages/ReportPage'))
+const AdminPage = lazy(() => import('./pages/AdminPage'))
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/staff/login" element={<StaffLoginPage />} />
         <Route path="/staff" element={<StaffPage />} />
         <Route path="/staff/report" element={<Suspense fallback={<p className="page muted">Loading…</p>}><ReportPage /></Suspense>} />
+        <Route path="/staff/admin" element={<Suspense fallback={<p className="page muted">Loading…</p>}><AdminPage /></Suspense>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
