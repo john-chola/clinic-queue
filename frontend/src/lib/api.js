@@ -16,6 +16,10 @@ export async function api(path, { method = 'GET', body, auth = false } = {}) {
   }
   const data = await res.json().catch(() => ({}))
   if (res.status === 401 && auth) clearStaff()
+  // 502–504 with no message: a proxy answered because the server is down, restarting or waking up
+  if (!res.ok && !data.message && res.status >= 502 && res.status <= 504) {
+    throw new Error('The server is not answering. Try again in a minute.')
+  }
   if (!res.ok) throw new Error(data.message || `Request failed (${res.status})`)
   return data
 }
