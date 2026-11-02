@@ -104,4 +104,6 @@ In short:
 
 ## What I learned
 
-*(Fill this in as you go: problems you hit and how you solved them. It makes great interview material.)*
+- **The backwards `if`.** My first version used `if (ticket.phone || ticket.notifiedAt) continue;` — the wrong way round, so it skipped the people *with* phones and tried to text the ones without. It looked reasonable when I wrote it, and the tests I hadn't written yet would have caught it in one run. Now I read every skip condition aloud: "if there is no phone, or they've already been notified, skip."
+- **Field names matter more than logic.** The service function was correct, but it queried `serviceId` when the model calls the field `service`, so it silently found nobody. The controller had the same mistake (`ticket.serviceId`), and `callNext` had no `serviceId` variable at all — it's `req.params.id`. Lesson: before using a field, open the model and copy the name exactly.
+- **`jest.mock` vs `jest.spyOn` with destructured imports.** `queueService.js` does `const { sendSms } = require('../utils/sms')` — that copies the function reference at module load. A later `jest.spyOn(sms, 'sendSms')` replaces the property on the *module object*, but `queueService` is still holding the original reference, so the spy never fires and the real SMS runs. `jest.mock('../utils/sms', factory)` replaces the whole module *before* `queueService` loads, so its destructure grabs the `jest.fn()`. That's the interview answer: destructuring captures a value, spying replaces a property — they point at different things.
